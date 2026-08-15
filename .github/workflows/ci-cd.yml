@@ -23,6 +23,10 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
 
+    env:
+      MONGO_URI: ${{ secrets.MONGO_URI }}
+      SECRET_KEY: ${{ secrets.SECRET_KEY }}
+
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -105,38 +109,51 @@ jobs:
       - name: Deploy container to EC2
         id: deployment
         uses: appleboy/ssh-action@v1.2.2
+
         env:
           AWS_REGION: ${{ secrets.AWS_REGION }}
           ECR_REGISTRY: 591667019613.dkr.ecr.ap-south-1.amazonaws.com
           IMAGE_URI: ${{ needs.build-and-push.outputs.image_uri }}
           MONGO_URI: ${{ secrets.MONGO_URI }}
           SECRET_KEY: ${{ secrets.SECRET_KEY }}
+
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           envs: AWS_REGION,ECR_REGISTRY,IMAGE_URI,MONGO_URI,SECRET_KEY
+
           script: |
             set -e
 
+            echo "========================================"
             echo "Logging into Amazon ECR..."
+            echo "========================================"
 
             aws ecr get-login-password --region "$AWS_REGION" | \
               sudo docker login \
                 --username AWS \
                 --password-stdin "$ECR_REGISTRY"
 
-            echo "Pulling image:"
+            echo "========================================"
+            echo "Pulling new Docker image..."
+            echo "========================================"
+
+            echo "Image:"
             echo "$IMAGE_URI"
 
             sudo docker pull "$IMAGE_URI"
 
+            echo "========================================"
             echo "Stopping existing container..."
+            echo "========================================"
 
             sudo docker stop flask-practice || true
             sudo docker rm flask-practice || true
 
+            echo "========================================"
             echo "Starting new container..."
+            echo "========================================"
 
             sudo docker run -d \
               --name flask-practice \
@@ -146,24 +163,41 @@ jobs:
               -e SECRET_KEY="$SECRET_KEY" \
               "$IMAGE_URI"
 
+            echo "========================================"
             echo "Waiting for application to start..."
+            echo "========================================"
+
+            sleep 5
+
+            echo "========================================"
+            echo "Running health check..."
+            echo "========================================"
 
             for i in {1..12}; do
+
               if curl -fsS http://localhost:5000/health; then
                 echo ""
-                echo "Health check passed."
+                echo "========================================"
+                echo "Health check PASSED"
+                echo "Deployment successful"
+                echo "========================================"
                 exit 0
               fi
 
-              echo "Health check attempt $i failed. Retrying..."
+              echo "Health check attempt $i failed."
+              echo "Retrying in 5 seconds..."
+
               sleep 5
             done
 
-            echo "Health check failed."
+            echo "========================================"
+            echo "Health check FAILED"
+            echo "========================================"
 
             echo "Container status:"
             sudo docker ps -a
 
+            echo ""
             echo "Container logs:"
             sudo docker logs flask-practice || true
 
