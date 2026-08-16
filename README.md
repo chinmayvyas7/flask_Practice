@@ -136,3 +136,5 @@ MIT License
 CI/CD deployment test.
 
 CI/CD deployment test.
+
+Email notification test.
