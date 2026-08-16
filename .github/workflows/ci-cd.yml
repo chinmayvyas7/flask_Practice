@@ -17,7 +17,7 @@ env:
 jobs:
 
   # ============================================================
-  # 1. CHECKOUT + INSTALL + TEST
+  # 1. TEST
   # ============================================================
   test:
     name: Test
@@ -54,10 +54,6 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
 
-    outputs:
-      image_tag: ${{ steps.image.outputs.tag }}
-      image_uri: ${{ steps.image.outputs.uri }}
-
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -73,29 +69,27 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Set image information
-        id: image
+      - name: Build Docker image
         env:
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          IMAGE_TAG="${GITHUB_SHA}"
-          IMAGE_URI="${REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+          IMAGE_URI="${REGISTRY}/${ECR_REPOSITORY}:${GITHUB_SHA}"
 
-          echo "tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
-          echo "uri=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
+          echo "Building image:"
+          echo "$IMAGE_URI"
 
-          echo "Docker image tag: ${IMAGE_TAG}"
-          echo "ECR image: ${IMAGE_URI}"
-
-      - name: Build Docker image
-        run: |
-          docker build \
-            -t "${{ steps.image.outputs.uri }}" \
-            .
+          docker build -t "$IMAGE_URI" .
 
       - name: Push Docker image to ECR
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          docker push "${{ steps.image.outputs.uri }}"
+          IMAGE_URI="${REGISTRY}/${ECR_REPOSITORY}:${GITHUB_SHA}"
+
+          echo "Pushing image:"
+          echo "$IMAGE_URI"
+
+          docker push "$IMAGE_URI"
 
   # ============================================================
   # 3. DEPLOY TO EC2 + HEALTH CHECK
@@ -107,13 +101,13 @@ jobs:
 
     steps:
       - name: Deploy container to EC2
-        id: deployment
         uses: appleboy/ssh-action@v1.2.2
 
         env:
           AWS_REGION: ${{ secrets.AWS_REGION }}
           ECR_REGISTRY: 591667019613.dkr.ecr.ap-south-1.amazonaws.com
-          IMAGE_URI: ${{ needs.build-and-push.outputs.image_uri }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ github.sha }}
           MONGO_URI: ${{ secrets.MONGO_URI }}
           SECRET_KEY: ${{ secrets.SECRET_KEY }}
 
@@ -121,7 +115,7 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: AWS_REGION,ECR_REGISTRY,IMAGE_URI,MONGO_URI,SECRET_KEY
+          envs: AWS_REGION,ECR_REGISTRY,ECR_REPOSITORY,IMAGE_TAG,MONGO_URI,SECRET_KEY
 
           script: |
             set -e
@@ -134,6 +128,8 @@ jobs:
               sudo docker login \
                 --username AWS \
                 --password-stdin "$ECR_REGISTRY"
+
+            IMAGE_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
 
             echo "========================================"
             echo "Pulling new Docker image..."
@@ -164,7 +160,7 @@ jobs:
               "$IMAGE_URI"
 
             echo "========================================"
-            echo "Waiting for application to start..."
+            echo "Waiting for application..."
             echo "========================================"
 
             sleep 5
